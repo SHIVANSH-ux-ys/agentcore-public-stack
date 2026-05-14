@@ -3,6 +3,7 @@ Stream coordinator for managing agent streaming lifecycle
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -89,359 +90,361 @@ class StreamCoordinator:
             agent_stream = agent.stream_async(prompt)
 
             # Process through new stream processor and format as SSE
-            async for event in process_agent_stream(agent_stream):
-                # Track when new assistant messages start (to associate metadata with them)
-                if event.get("type") == "message_start":
-                    role = event.get("data", {}).get("role")
-                    if role == "assistant":
-                        current_assistant_message_index += 1
-                        # Record the start time for this specific assistant message
-                        # This enables accurate per-message latency calculation
-                        per_message_metadata.append(
-                            {
-                                "usage": {},
-                                "metrics": {},
-                                "start_time": time.time(),  # When this message started
-                                "first_token_time": None,  # When first token was received
-                                "end_time": None,  # When this message ended
-                            }
-                        )
-                        logger.debug(f"📝 Assistant message {current_assistant_message_index} started at {per_message_metadata[-1]['start_time']}")
+            processor = process_agent_stream(agent_stream)
+            async with contextlib.aclosing(processor):
+                async for event in processor:
+                    # Track when new assistant messages start (to associate metadata with them)
+                    if event.get("type") == "message_start":
+                        role = event.get("data", {}).get("role")
+                        if role == "assistant":
+                            current_assistant_message_index += 1
+                            # Record the start time for this specific assistant message
+                            # This enables accurate per-message latency calculation
+                            per_message_metadata.append(
+                                {
+                                    "usage": {},
+                                    "metrics": {},
+                                    "start_time": time.time(),  # When this message started
+                                    "first_token_time": None,  # When first token was received
+                                    "end_time": None,  # When this message ended
+                                }
+                            )
+                            logger.debug(f"📝 Assistant message {current_assistant_message_index} started at {per_message_metadata[-1]['start_time']}")
 
-                # Track first token time per assistant message
-                # This captures when the first content delta arrives for each message
-                # We check for text content specifically to measure time to first TEXT token
-                if event.get("type") == "content_block_delta":
-                    event_data = event.get("data", {})
-                    # Only track first token for text deltas (not tool use deltas)
-                    # This gives accurate TTFT for actual text generation
-                    if event_data.get("type") == "text" and event_data.get("text"):
+                    # Track first token time per assistant message
+                    # This captures when the first content delta arrives for each message
+                    # We check for text content specifically to measure time to first TEXT token
+                    if event.get("type") == "content_block_delta":
+                        event_data = event.get("data", {})
+                        # Only track first token for text deltas (not tool use deltas)
+                        # This gives accurate TTFT for actual text generation
+                        if event_data.get("type") == "text" and event_data.get("text"):
+                            if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
+                                if per_message_metadata[current_assistant_message_index]["first_token_time"] is None:
+                                    per_message_metadata[current_assistant_message_index]["first_token_time"] = time.time()
+                                    logger.info(
+                                        f"📝 First TEXT token for assistant message {current_assistant_message_index} at {per_message_metadata[current_assistant_message_index]['first_token_time']:.3f}"
+                                    )
+                                    # Also update global first_token_time for the first message (backward compatibility)
+                                    if current_assistant_message_index == 0 and first_token_time is None:
+                                        first_token_time = per_message_metadata[0]["first_token_time"]
+
+                    # Track when assistant messages end
+                    if event.get("type") == "message_stop":
                         if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
-                            if per_message_metadata[current_assistant_message_index]["first_token_time"] is None:
-                                per_message_metadata[current_assistant_message_index]["first_token_time"] = time.time()
-                                logger.info(
-                                    f"📝 First TEXT token for assistant message {current_assistant_message_index} at {per_message_metadata[current_assistant_message_index]['first_token_time']:.3f}"
-                                )
-                                # Also update global first_token_time for the first message (backward compatibility)
-                                if current_assistant_message_index == 0 and first_token_time is None:
-                                    first_token_time = per_message_metadata[0]["first_token_time"]
+                            per_message_metadata[current_assistant_message_index]["end_time"] = time.time()
+                            logger.debug(f"📝 Assistant message {current_assistant_message_index} ended")
 
-                # Track when assistant messages end
-                if event.get("type") == "message_stop":
-                    if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
-                        per_message_metadata[current_assistant_message_index]["end_time"] = time.time()
-                        logger.debug(f"📝 Assistant message {current_assistant_message_index} ended")
+                    # Track individual metadata events (per assistant message)
+                    if event.get("type") == "metadata":
+                        event_data = event.get("data", {})
+                        if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
+                            msg_meta = per_message_metadata[current_assistant_message_index]
 
-                # Track individual metadata events (per assistant message)
-                if event.get("type") == "metadata":
-                    event_data = event.get("data", {})
-                    if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
-                        msg_meta = per_message_metadata[current_assistant_message_index]
+                            # Associate this metadata with the current assistant message
+                            if "usage" in event_data:
+                                msg_meta["usage"].update(event_data["usage"])
+                            if "metrics" in event_data:
+                                msg_meta["metrics"].update(event_data["metrics"])
 
-                        # Associate this metadata with the current assistant message
+                            # Calculate and store TTFT for this message NOW while we have timing context
+                            # Use the first_token_time we captured from content_block_delta
+                            # and the start_time from message_start
+                            if msg_meta.get("first_token_time") and msg_meta.get("start_time"):
+                                if "timeToFirstByteMs" not in msg_meta["metrics"]:
+                                    calculated_ttft = int((msg_meta["first_token_time"] - msg_meta["start_time"]) * 1000)
+                                    # For fast responses, TTFT should be at least the provider's reported latency portion
+                                    # If our calculated TTFT is < 10ms (event processing delay), use provider metrics
+                                    provider_latency = msg_meta["metrics"].get("latencyMs", 0)
+                                    if calculated_ttft < 10 and provider_latency > 100:
+                                        # Estimate TTFT as ~30% of total latency (typical for LLM calls)
+                                        msg_meta["metrics"]["timeToFirstByteMs"] = int(provider_latency * 0.3)
+                                        logger.info(
+                                            f"📊 Estimated TTFT for message {current_assistant_message_index}: {msg_meta['metrics']['timeToFirstByteMs']}ms (30% of {provider_latency}ms)"
+                                        )
+                                    elif calculated_ttft >= 10:
+                                        msg_meta["metrics"]["timeToFirstByteMs"] = calculated_ttft
+                                        logger.info(f"📊 Calculated TTFT for message {current_assistant_message_index}: {calculated_ttft}ms")
+
+                            # ENRICH the metadata event sent to client with our calculated TTFT
+                            # This ensures the client sees accurate per-message TTFT during streaming
+                            if msg_meta["metrics"].get("timeToFirstByteMs"):
+                                if "metrics" not in event_data:
+                                    event_data["metrics"] = {}
+                                event_data["metrics"]["timeToFirstByteMs"] = msg_meta["metrics"]["timeToFirstByteMs"]
+                                # Update the event with enriched data for client streaming
+                                event = {"type": "metadata", "data": event_data}
+                                logger.info(f"📊 Enriched metadata event for client with TTFT: {msg_meta['metrics']['timeToFirstByteMs']}ms")
+
+                            logger.debug(f"📊 Metadata for message {current_assistant_message_index}: {msg_meta['metrics']}")
+                        # Also accumulate for backward compatibility
                         if "usage" in event_data:
-                            msg_meta["usage"].update(event_data["usage"])
+                            accumulated_metadata["usage"].update(event_data["usage"])
                         if "metrics" in event_data:
-                            msg_meta["metrics"].update(event_data["metrics"])
+                            accumulated_metadata["metrics"].update(event_data["metrics"])
 
-                        # Calculate and store TTFT for this message NOW while we have timing context
-                        # Use the first_token_time we captured from content_block_delta
-                        # and the start_time from message_start
-                        if msg_meta.get("first_token_time") and msg_meta.get("start_time"):
-                            if "timeToFirstByteMs" not in msg_meta["metrics"]:
-                                calculated_ttft = int((msg_meta["first_token_time"] - msg_meta["start_time"]) * 1000)
-                                # For fast responses, TTFT should be at least the provider's reported latency portion
-                                # If our calculated TTFT is < 10ms (event processing delay), use provider metrics
-                                provider_latency = msg_meta["metrics"].get("latencyMs", 0)
-                                if calculated_ttft < 10 and provider_latency > 100:
-                                    # Estimate TTFT as ~30% of total latency (typical for LLM calls)
-                                    msg_meta["metrics"]["timeToFirstByteMs"] = int(provider_latency * 0.3)
-                                    logger.info(
-                                        f"📊 Estimated TTFT for message {current_assistant_message_index}: {msg_meta['metrics']['timeToFirstByteMs']}ms (30% of {provider_latency}ms)"
-                                    )
-                                elif calculated_ttft >= 10:
-                                    msg_meta["metrics"]["timeToFirstByteMs"] = calculated_ttft
-                                    logger.info(f"📊 Calculated TTFT for message {current_assistant_message_index}: {calculated_ttft}ms")
-
-                        # ENRICH the metadata event sent to client with our calculated TTFT
-                        # This ensures the client sees accurate per-message TTFT during streaming
-                        if msg_meta["metrics"].get("timeToFirstByteMs"):
-                            if "metrics" not in event_data:
-                                event_data["metrics"] = {}
-                            event_data["metrics"]["timeToFirstByteMs"] = msg_meta["metrics"]["timeToFirstByteMs"]
-                            # Update the event with enriched data for client streaming
-                            event = {"type": "metadata", "data": event_data}
-                            logger.info(f"📊 Enriched metadata event for client with TTFT: {msg_meta['metrics']['timeToFirstByteMs']}ms")
-
-                        logger.debug(f"📊 Metadata for message {current_assistant_message_index}: {msg_meta['metrics']}")
-                    # Also accumulate for backward compatibility
-                    if "usage" in event_data:
-                        accumulated_metadata["usage"].update(event_data["usage"])
-                    if "metrics" in event_data:
-                        accumulated_metadata["metrics"].update(event_data["metrics"])
-
-                # Collect metadata_summary event (don't send to client as-is).
-                #
-                # NOTE: metadata_summary carries Strands' EventLoopMetrics
-                # `accumulated_usage`, which sums each LLM call's full
-                # context-size across the turn (and across the agent's
-                # whole lifetime, per Strands' docs). For a 2-call tool
-                # turn with call_1.input=1000 and call_2.input=2500,
-                # accumulated_usage.inputTokens=3500 — but the *current*
-                # context occupancy is 2500, not 3500. We deliberately do
-                # NOT update accumulated_metadata["usage"] / ["metrics"]
-                # from this event: stream_coordinator's accumulated_metadata
-                # drives (a) the final SSE `usage` the frontend uses for
-                # the context-% badge and (b) the compaction trigger —
-                # both want "current context size", which the per-call
-                # `metadata` events already provide via last-write-wins
-                # `.update()`. Per-message cost attribution rides
-                # per_message_metadata (per-call) and is unaffected.
-                # We only keep the first_token_time backstop.
-                if event.get("type") == "metadata_summary":
-                    event_data = event.get("data", {})
-                    if "first_token_time" in event_data:
-                        first_token_time = event_data["first_token_time"]
-                        # Associate first_token_time with first assistant message if we have one
-                        if per_message_metadata and per_message_metadata[0]["first_token_time"] is None:
-                            per_message_metadata[0]["first_token_time"] = first_token_time
-                    # Don't yield this event to the client (will send final metadata before done)
-                    continue
-
-                # If the agent paused on an interrupt, surface one SSE event
-                # per pending interrupt before the stream closes. The frontend
-                # uses these to drive its prompts (OAuth popup, tool-approval
-                # modal) and POSTs the user's response back to resume the turn.
-                # Done before the metadata branch so the events land between
-                # message_stop and the final metadata/done block. The
-                # PausedTurnSnapshot is persisted once per pause regardless of
-                # interrupt flavor, so any extractor's resume path can rebuild
-                # the agent shape after a refresh / cache eviction.
-                if event.get("type") == "done":
-                    await self._persist_paused_turn_snapshot(
-                        agent,
-                        session_id=session_id,
-                        user_id=user_id,
-                        main_agent_wrapper=main_agent_wrapper,
-                    )
-                    for sse in await self._extract_oauth_required_events(
-                        agent,
-                        session_id=session_id,
-                        user_id=user_id,
-                    ):
-                        yield sse
-                    for sse in await self._extract_tool_approval_required_events(
-                        agent,
-                        session_id=session_id,
-                        user_id=user_id,
-                    ):
-                        yield sse
-
-                # Check if this is the "done" event - send final metadata before it
-                if event.get("type") == "done":
-                    # Calculate end-to-end latency
-                    stream_end_time = time.time()
-
-                    # Calculate time to first token for client display
-                    time_to_first_token_ms = None
-                    if first_token_time:
-                        time_to_first_token_ms = int((first_token_time - stream_start_time) * 1000)
-                    elif accumulated_metadata.get("metrics", {}).get("timeToFirstByteMs"):
-                        time_to_first_token_ms = int(accumulated_metadata["metrics"]["timeToFirstByteMs"])
-
-                    # Send final metadata event to client with calculated TTFT
-                    # This ensures the client receives the final metadata with accurate TTFT calculation
-                    if accumulated_metadata.get("usage") or accumulated_metadata.get("metrics") or time_to_first_token_ms:
-                        final_metadata = {"usage": accumulated_metadata.get("usage", {}), "metrics": {}}
-
-                        # Include provider metrics if available
-                        if accumulated_metadata.get("metrics"):
-                            final_metadata["metrics"].update(accumulated_metadata["metrics"])
-
-                        # Add calculated time to first token (overrides provider value if we calculated it)
-                        if time_to_first_token_ms is not None:
-                            final_metadata["metrics"]["timeToFirstByteMs"] = time_to_first_token_ms
-
-                        # Add end-to-end latency to metrics for consistency
-                        final_metadata["metrics"]["latencyMs"] = int((stream_end_time - stream_start_time) * 1000)
-
-                        # Cost: sum the FINAL usage of each assistant message in
-                        # this turn and price it. We deliberately price each
-                        # message independently and sum, instead of pricing
-                        # the cumulative usage once, because Strands emits
-                        # multiple metadata events per message (intermediate
-                        # + cumulative) and the cumulative usage on the last
-                        # event already includes prior messages' input
-                        # tokens. Per-message pricing matches what gets
-                        # persisted (one C# record per assistant message).
-                        if main_agent_wrapper and hasattr(main_agent_wrapper, "model_config"):
-                            model_id = main_agent_wrapper.model_config.model_id
-                            try:
-                                turn_total = 0.0
-                                turn_input_cost = 0.0
-                                turn_output_cost = 0.0
-                                turn_cache_read_cost = 0.0
-                                turn_cache_write_cost = 0.0
-                                for msg_idx, msg_meta in enumerate(per_message_metadata):
-                                    msg_usage = msg_meta.get("usage") or {}
-                                    if not msg_usage:
-                                        continue
-                                    msg_cost = await self._calculate_streaming_cost(
-                                        model_id=model_id,
-                                        usage=msg_usage,
-                                    )
-                                    if msg_cost is None:
-                                        continue
-                                    turn_total += msg_cost.get("total", 0.0)
-                                    turn_input_cost += msg_cost.get("inputCost", 0.0)
-                                    turn_output_cost += msg_cost.get("outputCost", 0.0)
-                                    turn_cache_read_cost += msg_cost.get("cacheReadCost", 0.0)
-                                    turn_cache_write_cost += msg_cost.get("cacheWriteCost", 0.0)
-                                    logger.info(
-                                        f"💰 Per-message cost (msg_idx={msg_idx}): ${msg_cost['total']:.6f} "
-                                        f"for {msg_usage.get('inputTokens', 0)} input, {msg_usage.get('outputTokens', 0)} output tokens"
-                                    )
-                                if turn_total > 0:
-                                    final_metadata["cost"] = {
-                                        "total": turn_total,
-                                        "inputCost": turn_input_cost,
-                                        "outputCost": turn_output_cost,
-                                        "cacheReadCost": turn_cache_read_cost,
-                                        "cacheWriteCost": turn_cache_write_cost,
-                                    }
-                                    logger.info(
-                                        f"💰 Turn total cost: ${turn_total:.6f} across {len(per_message_metadata)} message(s)"
-                                    )
-                            except Exception as cost_error:
-                                logger.warning(f"Failed to calculate turn cost: {cost_error}")
-
-                            # Surface the model's context window so the
-                            # frontend session-cost badge can show "% of
-                            # context used" without an extra round-trip.
-                            try:
-                                from apis.shared.costs.pricing_config import get_model_by_model_id
-                                model_record = await get_model_by_model_id(model_id)
-                                if model_record is not None:
-                                    max_input_tokens = getattr(model_record, "max_input_tokens", None)
-                                    if max_input_tokens:
-                                        final_metadata["contextWindow"] = int(max_input_tokens)
-                            except Exception as ctx_err:
-                                logger.debug(f"Skipping contextWindow lookup: {ctx_err}")
-
-                        # Log cache metrics for performance monitoring
-                        self._log_cache_metrics(usage=final_metadata.get("usage", {}), session_id=session_id)
-
-                        # Send final metadata event to client (before done event)
-                        final_metadata_event = {"type": "metadata", "data": final_metadata}
-                        yield self._format_sse_event(final_metadata_event)
-
-                    # Update compaction state after the final metadata event so
-                    # the badge updates first, then the divider drops in. If the
-                    # checkpoint advanced on this turn, emit a `compaction` SSE
-                    # so the frontend can place an inline "earlier messages
-                    # summarized" divider. Fires after metadata, before done.
+                    # Collect metadata_summary event (don't send to client as-is).
                     #
-                    # CAUTION: do NOT replace this with Strands'
-                    # AgentResult.context_size / EventLoopMetrics.latest_context_size.
-                    # Both return ONLY `inputTokens` from the last cycle —
-                    # under Bedrock prompt caching that's the uncached
-                    # suffix only, so a 50k-token fully-cached context
-                    # reports ~50 (inputTokens) and hides ~49,950 in
-                    # cacheReadInputTokens. Summing all three buckets
-                    # below is the only correct "current context size"
-                    # under caching.
-                    if hasattr(session_manager, "update_after_turn"):
-                        usage = accumulated_metadata.get("usage", {})
-                        total_input_tokens = (
-                            usage.get("inputTokens", 0)
-                            + usage.get("cacheReadInputTokens", 0)
-                            + usage.get("cacheWriteInputTokens", 0)
+                    # NOTE: metadata_summary carries Strands' EventLoopMetrics
+                    # `accumulated_usage`, which sums each LLM call's full
+                    # context-size across the turn (and across the agent's
+                    # whole lifetime, per Strands' docs). For a 2-call tool
+                    # turn with call_1.input=1000 and call_2.input=2500,
+                    # accumulated_usage.inputTokens=3500 — but the *current*
+                    # context occupancy is 2500, not 3500. We deliberately do
+                    # NOT update accumulated_metadata["usage"] / ["metrics"]
+                    # from this event: stream_coordinator's accumulated_metadata
+                    # drives (a) the final SSE `usage` the frontend uses for
+                    # the context-% badge and (b) the compaction trigger —
+                    # both want "current context size", which the per-call
+                    # `metadata` events already provide via last-write-wins
+                    # `.update()`. Per-message cost attribution rides
+                    # per_message_metadata (per-call) and is unaffected.
+                    # We only keep the first_token_time backstop.
+                    if event.get("type") == "metadata_summary":
+                        event_data = event.get("data", {})
+                        if "first_token_time" in event_data:
+                            first_token_time = event_data["first_token_time"]
+                            # Associate first_token_time with first assistant message if we have one
+                            if per_message_metadata and per_message_metadata[0]["first_token_time"] is None:
+                                per_message_metadata[0]["first_token_time"] = first_token_time
+                        # Don't yield this event to the client (will send final metadata before done)
+                        continue
+
+                    # If the agent paused on an interrupt, surface one SSE event
+                    # per pending interrupt before the stream closes. The frontend
+                    # uses these to drive its prompts (OAuth popup, tool-approval
+                    # modal) and POSTs the user's response back to resume the turn.
+                    # Done before the metadata branch so the events land between
+                    # message_stop and the final metadata/done block. The
+                    # PausedTurnSnapshot is persisted once per pause regardless of
+                    # interrupt flavor, so any extractor's resume path can rebuild
+                    # the agent shape after a refresh / cache eviction.
+                    if event.get("type") == "done":
+                        await self._persist_paused_turn_snapshot(
+                            agent,
+                            session_id=session_id,
+                            user_id=user_id,
+                            main_agent_wrapper=main_agent_wrapper,
                         )
-                        if total_input_tokens > 0:
-                            try:
-                                current_messages = getattr(agent, "messages", None)
-                                compaction_result = await session_manager.update_after_turn(
-                                    total_input_tokens,
-                                    current_messages=current_messages,
-                                )
-                                logger.info(f"   Compaction state updated: {total_input_tokens:,} input tokens")
-                                if compaction_result is not None:
-                                    compaction_payload = {
-                                        "type": "compaction",
-                                        "previousCheckpoint": compaction_result.previous_checkpoint,
-                                        "newCheckpoint": compaction_result.new_checkpoint,
-                                        "summarizedTurns": compaction_result.summarized_turns,
-                                        "inputTokens": compaction_result.input_tokens,
-                                    }
-                                    yield f"event: compaction\ndata: {json.dumps(compaction_payload)}\n\n"
-                            except Exception as e:
-                                logger.warning(f"Failed to update compaction state: {e}")
+                        for sse in await self._extract_oauth_required_events(
+                            agent,
+                            session_id=session_id,
+                            user_id=user_id,
+                        ):
+                            yield sse
+                        for sse in await self._extract_tool_approval_required_events(
+                            agent,
+                            session_id=session_id,
+                            user_id=user_id,
+                        ):
+                            yield sse
 
-                # Intercept legacy "error" events from stream_processor and convert to conversational format
-                # This ensures errors appear as assistant messages in the chat UI
-                if event.get("type") == "error":
-                    error_data = event.get("data", {})
-                    error_message = error_data.get("error", "An error occurred")
-                    error_detail = error_data.get("detail", "")
-                    error_code_str = error_data.get("code", "stream_error")
+                    # Check if this is the "done" event - send final metadata before it
+                    if event.get("type") == "done":
+                        # Calculate end-to-end latency
+                        stream_end_time = time.time()
 
-                    # Map string code to ErrorCode enum
-                    try:
-                        error_code = ErrorCode(error_code_str)
-                    except ValueError:
-                        error_code = ErrorCode.STREAM_ERROR
+                        # Calculate time to first token for client display
+                        time_to_first_token_ms = None
+                        if first_token_time:
+                            time_to_first_token_ms = int((first_token_time - stream_start_time) * 1000)
+                        elif accumulated_metadata.get("metrics", {}).get("timeToFirstByteMs"):
+                            time_to_first_token_ms = int(accumulated_metadata["metrics"]["timeToFirstByteMs"])
 
-                    # Create a synthetic exception for build_conversational_error_event
-                    synthetic_error = Exception(f"{error_message}: {error_detail}" if error_detail else error_message)
+                        # Send final metadata event to client with calculated TTFT
+                        # This ensures the client receives the final metadata with accurate TTFT calculation
+                        if accumulated_metadata.get("usage") or accumulated_metadata.get("metrics") or time_to_first_token_ms:
+                            final_metadata = {"usage": accumulated_metadata.get("usage", {}), "metrics": {}}
 
-                    # Build conversational error event
-                    conv_error_event = build_conversational_error_event(
-                        code=error_code, error=synthetic_error, session_id=session_id, recoverable=error_data.get("recoverable", False)
-                    )
+                            # Include provider metrics if available
+                            if accumulated_metadata.get("metrics"):
+                                final_metadata["metrics"].update(accumulated_metadata["metrics"])
 
-                    # Emit message events so error appears in chat
-                    yield f'event: message_start\ndata: {{"role": "assistant"}}\n\n'
-                    yield f'event: content_block_start\ndata: {{"contentBlockIndex": 0, "type": "text"}}\n\n'
-                    yield f"event: content_block_delta\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text', 'text': conv_error_event.message})}\n\n"
-                    yield f'event: content_block_stop\ndata: {{"contentBlockIndex": 0}}\n\n'
-                    yield f'event: message_stop\ndata: {{"stopReason": "error"}}\n\n'
-                    yield conv_error_event.to_sse_format()
-                    yield "event: done\ndata: {}\n\n"
+                            # Add calculated time to first token (overrides provider value if we calculated it)
+                            if time_to_first_token_ms is not None:
+                                final_metadata["metrics"]["timeToFirstByteMs"] = time_to_first_token_ms
 
-                    # Persist error messages to session
-                    try:
-                        from strands.types.content import Message
-                        from strands.types.session import SessionMessage
+                            # Add end-to-end latency to metrics for consistency
+                            final_metadata["metrics"]["latencyMs"] = int((stream_end_time - stream_start_time) * 1000)
 
-                        from agents.main_agent.session.session_factory import SessionFactory
+                            # Cost: sum the FINAL usage of each assistant message in
+                            # this turn and price it. We deliberately price each
+                            # message independently and sum, instead of pricing
+                            # the cumulative usage once, because Strands emits
+                            # multiple metadata events per message (intermediate
+                            # + cumulative) and the cumulative usage on the last
+                            # event already includes prior messages' input
+                            # tokens. Per-message pricing matches what gets
+                            # persisted (one C# record per assistant message).
+                            if main_agent_wrapper and hasattr(main_agent_wrapper, "model_config"):
+                                model_id = main_agent_wrapper.model_config.model_id
+                                try:
+                                    turn_total = 0.0
+                                    turn_input_cost = 0.0
+                                    turn_output_cost = 0.0
+                                    turn_cache_read_cost = 0.0
+                                    turn_cache_write_cost = 0.0
+                                    for msg_idx, msg_meta in enumerate(per_message_metadata):
+                                        msg_usage = msg_meta.get("usage") or {}
+                                        if not msg_usage:
+                                            continue
+                                        msg_cost = await self._calculate_streaming_cost(
+                                            model_id=model_id,
+                                            usage=msg_usage,
+                                        )
+                                        if msg_cost is None:
+                                            continue
+                                        turn_total += msg_cost.get("total", 0.0)
+                                        turn_input_cost += msg_cost.get("inputCost", 0.0)
+                                        turn_output_cost += msg_cost.get("outputCost", 0.0)
+                                        turn_cache_read_cost += msg_cost.get("cacheReadCost", 0.0)
+                                        turn_cache_write_cost += msg_cost.get("cacheWriteCost", 0.0)
+                                        logger.info(
+                                            f"💰 Per-message cost (msg_idx={msg_idx}): ${msg_cost['total']:.6f} "
+                                            f"for {msg_usage.get('inputTokens', 0)} input, {msg_usage.get('outputTokens', 0)} output tokens"
+                                        )
+                                    if turn_total > 0:
+                                        final_metadata["cost"] = {
+                                            "total": turn_total,
+                                            "inputCost": turn_input_cost,
+                                            "outputCost": turn_output_cost,
+                                            "cacheReadCost": turn_cache_read_cost,
+                                            "cacheWriteCost": turn_cache_write_cost,
+                                        }
+                                        logger.info(
+                                            f"💰 Turn total cost: ${turn_total:.6f} across {len(per_message_metadata)} message(s)"
+                                        )
+                                except Exception as cost_error:
+                                    logger.warning(f"Failed to calculate turn cost: {cost_error}")
 
-                        persist_session_manager = SessionFactory.create_session_manager(session_id=session_id, user_id=user_id, caching_enabled=False)
+                                # Surface the model's context window so the
+                                # frontend session-cost badge can show "% of
+                                # context used" without an extra round-trip.
+                                try:
+                                    from apis.shared.costs.pricing_config import get_model_by_model_id
+                                    model_record = await get_model_by_model_id(model_id)
+                                    if model_record is not None:
+                                        max_input_tokens = getattr(model_record, "max_input_tokens", None)
+                                        if max_input_tokens:
+                                            final_metadata["contextWindow"] = int(max_input_tokens)
+                                except Exception as ctx_err:
+                                    logger.debug(f"Skipping contextWindow lookup: {ctx_err}")
 
-                        # Extract user text from prompt (can be string or ContentBlock list)
-                        if isinstance(prompt, str):
-                            user_text = prompt
-                        else:
-                            # Extract text from ContentBlock list
-                            user_text = " ".join(block.get("text", "") for block in prompt if isinstance(block, dict) and "text" in block)
+                            # Log cache metrics for performance monitoring
+                            self._log_cache_metrics(usage=final_metadata.get("usage", {}), session_id=session_id)
 
-                        user_msg: Message = {"role": "user", "content": [{"text": user_text}]}
-                        assistant_msg: Message = {"role": "assistant", "content": [{"text": conv_error_event.message}]}
+                            # Send final metadata event to client (before done event)
+                            final_metadata_event = {"type": "metadata", "data": final_metadata}
+                            yield self._format_sse_event(final_metadata_event)
 
-                        if hasattr(persist_session_manager, "base_manager") and hasattr(persist_session_manager.base_manager, "create_message"):
-                            user_session_msg = SessionMessage.from_message(user_msg, 0)
-                            assistant_session_msg = SessionMessage.from_message(assistant_msg, 1)
-                            persist_session_manager.base_manager.create_message(session_id, "default", user_session_msg)
-                            persist_session_manager.base_manager.create_message(session_id, "default", assistant_session_msg)
-                            logger.info(f"💾 Saved intercepted error messages to session {session_id}")
-                    except Exception as persist_error:
-                        logger.error(f"Failed to persist intercepted error to session: {persist_error}")
+                        # Update compaction state after the final metadata event so
+                        # the badge updates first, then the divider drops in. If the
+                        # checkpoint advanced on this turn, emit a `compaction` SSE
+                        # so the frontend can place an inline "earlier messages
+                        # summarized" divider. Fires after metadata, before done.
+                        #
+                        # CAUTION: do NOT replace this with Strands'
+                        # AgentResult.context_size / EventLoopMetrics.latest_context_size.
+                        # Both return ONLY `inputTokens` from the last cycle —
+                        # under Bedrock prompt caching that's the uncached
+                        # suffix only, so a 50k-token fully-cached context
+                        # reports ~50 (inputTokens) and hides ~49,950 in
+                        # cacheReadInputTokens. Summing all three buckets
+                        # below is the only correct "current context size"
+                        # under caching.
+                        if hasattr(session_manager, "update_after_turn"):
+                            usage = accumulated_metadata.get("usage", {})
+                            total_input_tokens = (
+                                usage.get("inputTokens", 0)
+                                + usage.get("cacheReadInputTokens", 0)
+                                + usage.get("cacheWriteInputTokens", 0)
+                            )
+                            if total_input_tokens > 0:
+                                try:
+                                    current_messages = getattr(agent, "messages", None)
+                                    compaction_result = await session_manager.update_after_turn(
+                                        total_input_tokens,
+                                        current_messages=current_messages,
+                                    )
+                                    logger.info(f"   Compaction state updated: {total_input_tokens:,} input tokens")
+                                    if compaction_result is not None:
+                                        compaction_payload = {
+                                            "type": "compaction",
+                                            "previousCheckpoint": compaction_result.previous_checkpoint,
+                                            "newCheckpoint": compaction_result.new_checkpoint,
+                                            "summarizedTurns": compaction_result.summarized_turns,
+                                            "inputTokens": compaction_result.input_tokens,
+                                        }
+                                        yield f"event: compaction\ndata: {json.dumps(compaction_payload)}\n\n"
+                                except Exception as e:
+                                    logger.warning(f"Failed to update compaction state: {e}")
 
-                    # Skip the original error event and exit the loop - we've handled the error
-                    return
+                    # Intercept legacy "error" events from stream_processor and convert to conversational format
+                    # This ensures errors appear as assistant messages in the chat UI
+                    if event.get("type") == "error":
+                        error_data = event.get("data", {})
+                        error_message = error_data.get("error", "An error occurred")
+                        error_detail = error_data.get("detail", "")
+                        error_code_str = error_data.get("code", "stream_error")
 
-                # Format as SSE event and yield (including done event after metadata)
-                sse_event = self._format_sse_event(event)
-                yield sse_event
+                        # Map string code to ErrorCode enum
+                        try:
+                            error_code = ErrorCode(error_code_str)
+                        except ValueError:
+                            error_code = ErrorCode.STREAM_ERROR
+
+                        # Create a synthetic exception for build_conversational_error_event
+                        synthetic_error = Exception(f"{error_message}: {error_detail}" if error_detail else error_message)
+
+                        # Build conversational error event
+                        conv_error_event = build_conversational_error_event(
+                            code=error_code, error=synthetic_error, session_id=session_id, recoverable=error_data.get("recoverable", False)
+                        )
+
+                        # Emit message events so error appears in chat
+                        yield f'event: message_start\ndata: {{"role": "assistant"}}\n\n'
+                        yield f'event: content_block_start\ndata: {{"contentBlockIndex": 0, "type": "text"}}\n\n'
+                        yield f"event: content_block_delta\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text', 'text': conv_error_event.message})}\n\n"
+                        yield f'event: content_block_stop\ndata: {{"contentBlockIndex": 0}}\n\n'
+                        yield f'event: message_stop\ndata: {{"stopReason": "error"}}\n\n'
+                        yield conv_error_event.to_sse_format()
+                        yield "event: done\ndata: {}\n\n"
+
+                        # Persist error messages to session
+                        try:
+                            from strands.types.content import Message
+                            from strands.types.session import SessionMessage
+
+                            from agents.main_agent.session.session_factory import SessionFactory
+
+                            persist_session_manager = SessionFactory.create_session_manager(session_id=session_id, user_id=user_id, caching_enabled=False)
+
+                            # Extract user text from prompt (can be string or ContentBlock list)
+                            if isinstance(prompt, str):
+                                user_text = prompt
+                            else:
+                                # Extract text from ContentBlock list
+                                user_text = " ".join(block.get("text", "") for block in prompt if isinstance(block, dict) and "text" in block)
+
+                            user_msg: Message = {"role": "user", "content": [{"text": user_text}]}
+                            assistant_msg: Message = {"role": "assistant", "content": [{"text": conv_error_event.message}]}
+
+                            if hasattr(persist_session_manager, "base_manager") and hasattr(persist_session_manager.base_manager, "create_message"):
+                                user_session_msg = SessionMessage.from_message(user_msg, 0)
+                                assistant_session_msg = SessionMessage.from_message(assistant_msg, 1)
+                                persist_session_manager.base_manager.create_message(session_id, "default", user_session_msg)
+                                persist_session_manager.base_manager.create_message(session_id, "default", assistant_session_msg)
+                                logger.info(f"💾 Saved intercepted error messages to session {session_id}")
+                        except Exception as persist_error:
+                            logger.error(f"Failed to persist intercepted error to session: {persist_error}")
+
+                        # Skip the original error event and exit the loop - we've handled the error
+                        return
+
+                    # Format as SSE event and yield (including done event after metadata)
+                    sse_event = self._format_sse_event(event)
+                    yield sse_event
 
             # Calculate end-to-end latency (fallback if done event wasn't received)
             stream_end_time = time.time()
@@ -595,6 +598,11 @@ class StreamCoordinator:
                     logger.info(f"💾 Stored displayText for user message {user_message_index}")
                 except Exception as e:
                     logger.error(f"Failed to store user displayText: {e}", exc_info=True)
+
+        except (asyncio.CancelledError, GeneratorExit):
+            logger.info(f"🛑 Stream cancelled or closed by consumer for session {session_id}")
+            self._emergency_flush(session_manager)
+            raise
 
         except Exception as e:
             # Handle errors with emergency flush

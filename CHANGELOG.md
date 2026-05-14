@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [Unreleased]
+
+### 🐛 Fixed
+
+- Bedrock streaming stability: Added robust cancellation handling in `stream_coordinator` with emergency state flushing to prevent session message loss on disconnect (#261).
+- Bedrock streaming efficiency: Implemented early-exit logic in `stream_processor` to terminate the stream as soon as final metrics are received, reducing trailing latency.
+- Async bottleneck in `list_spreadsheets_tool`: Offloaded blocking DynamoDB calls to `asyncio.to_thread` and converted session repository calls to direct awaits, preventing event loop stalls (#260).
+
+### 🧪 Test Coverage
+
+- New `test_stream_cancellation.py` covering resource disposal, emergency flushing, and early-exit optimizations.
+- New `verify_spreadsheet_async.py` script for end-to-end async safety verification of spreadsheet tools.
+
 ## [1.0.0-beta.25] - 2026-05-11
 
 Production-readiness fix for the BFF Token Handler shipped in beta.24. Fixes three production-breaking bugs introduced by beta.24: event-loop-blocking sync boto3 on every cookie-bearing request, per-process AES-256 keys that can't round-trip cookies across ECS tasks, and an in-process-only refresh lock that races Cognito rotation across replicas. Also ships PDF thumbnails, rich attachment previews, spreadsheet analysis tools, centralized 401 handling, and a `SKIP_AUTH` local-dev bypass.

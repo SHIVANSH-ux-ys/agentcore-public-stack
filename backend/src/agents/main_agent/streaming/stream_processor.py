@@ -38,6 +38,7 @@ ADDITIONAL ENHANCEMENTS:
 """
 
 import base64
+import contextlib
 import logging
 import time
 from datetime import datetime, date
@@ -1297,6 +1298,8 @@ async def process_agent_stream(
         "metrics": {}
     }
     first_token_time: Optional[float] = None
+    complete_seen: bool = False
+    result_seen: bool = False
 
     # Track current content block index for providers that don't send it (like OpenAI)
     # Using dict for mutability across function calls
@@ -1305,56 +1308,29 @@ async def process_agent_stream(
     try:
         # Iterate through each raw event from the agent stream
         # The agent stream is an async generator that yields events as they occur
-        async for event in agent_stream:
+        async with contextlib.aclosing(agent_stream):
+            async for event in agent_stream:
 
-            # Validate event structure (basic check)
-            if not isinstance(event, dict):
-                logger.warning(f"Unexpected event type: {type(event)}, expected dict")
-                continue
+                # Validate event structure (basic check)
+                if not isinstance(event, dict):
+                    logger.warning(f"Unexpected event type: {type(event)}, expected dict")
+                    continue
 
-            # STEP 1: Process metadata events FIRST (before completion check)
-            # IMPORTANT: Process metadata BEFORE checking completion to ensure
-            # metadata is extracted even if complete=True is in the same event.
-            # Metadata is critical for cost tracking and should always be sent.
-            # ALSO accumulate metadata for final summary
-            # NOTE: timeToFirstByteMs from provider will be stored in metrics
-            # and the coordinator can use it as a fallback if first_token_time is not set
-            for processed_event in _handle_metadata_events(event):
-                # Accumulate metadata for the final summary. Both per-call
-                # `metadata` events (each LLM call's usage) and the
-                # turn-cumulative `metadata_summary` event (extracted from
-                # AgentResult.metrics.accumulated_usage) feed this dict —
-                # the cumulative event arrives last and `update()` makes it
-                # last-write-wins, so accumulated_metadata ends the turn
-                # carrying true totals.
-                if processed_event.get("type") in ("metadata", "metadata_summary"):
-                    event_data = processed_event.get("data", {})
-                    if "usage" in event_data:
-                        accumulated_metadata["usage"].update(event_data["usage"])
-                    if "metrics" in event_data:
-                        accumulated_metadata["metrics"].update(event_data["metrics"])
-                # Yield the metadata event
-                yield processed_event
-
-            # STEP 2: Process completion/error events (may break the loop)
-            # These events signal the end of processing, so we check them after metadata
-            # IMPORTANT: We check for 'result' before breaking - result may contain metrics
-            # and might come in the same event as complete, or in the next event
-            completion_events, should_break = _handle_completion_events(event)
-            for processed_event in completion_events:
-                yield processed_event
-
-            # If we should break, check one more time for metadata
-            # IMPORTANT: Don't break immediately if we haven't seen result yet
-            # The result event (which contains metrics) might come after complete
-            if should_break:
-                # Check one more time for metadata in case result came with complete
-                metadata_events_after_complete = _handle_metadata_events(event)
-                for processed_event in metadata_events_after_complete:
-                    # Accumulate metadata for summary — see note on the main
-                    # loop's accumulator above. Both `metadata` (per-call)
-                    # and `metadata_summary` (turn-cumulative from result)
-                    # feed accumulated_metadata so the final emit is total.
+                # STEP 1: Process metadata events FIRST (before completion check)
+                # IMPORTANT: Process metadata BEFORE checking completion to ensure
+                # metadata is extracted even if complete=True is in the same event.
+                # Metadata is critical for cost tracking and should always be sent.
+                # ALSO accumulate metadata for final summary
+                # NOTE: timeToFirstByteMs from provider will be stored in metrics
+                # and the coordinator can use it as a fallback if first_token_time is not set
+                for processed_event in _handle_metadata_events(event):
+                    # Accumulate metadata for the final summary. Both per-call
+                    # `metadata` events (each LLM call's usage) and the
+                    # turn-cumulative `metadata_summary` event (extracted from
+                    # AgentResult.metrics.accumulated_usage) feed this dict —
+                    # the cumulative event arrives last and `update()` makes it
+                    # last-write-wins, so accumulated_metadata ends the turn
+                    # carrying true totals.
                     if processed_event.get("type") in ("metadata", "metadata_summary"):
                         event_data = processed_event.get("data", {})
                         if "usage" in event_data:
@@ -1364,70 +1340,104 @@ async def process_agent_stream(
                     # Yield the metadata event
                     yield processed_event
 
-                # TODO: result_seen is never set to True — this break is currently dead code.
-                # When result-event tracking is implemented, set result_seen = True on result events
-                # and uncomment the break to exit early once both complete + result are seen.
-                # if result_seen:
-                #     break
-
-            # STEP 3: Process lifecycle events
-            # NOTE: We process lifecycle events to capture the 'result' event which contains metrics
-            # The result event is needed for metadata extraction, but we don't yield it to avoid
-            # sending large result objects to the client. Metadata is extracted separately.
-            lifecycle_events = _handle_lifecycle_events(event)
-            # Only yield non-result lifecycle events (result is processed for metadata only)
-            for processed_event in lifecycle_events:
-                # Skip result events - we only use them for metadata extraction
-                if processed_event.get("type") != "result":
+                # STEP 2: Process completion/error events (may break the loop)
+                # These events signal the end of processing, so we check them after metadata
+                # IMPORTANT: We check for 'result' before breaking - result may contain metrics
+                # and might come in the same event as complete, or in the next event
+                completion_events, is_complete = _handle_completion_events(event)
+                if is_complete:
+                    complete_seen = True
+                for processed_event in completion_events:
                     yield processed_event
 
-            # STEP 4: Process content block events
-            # These track the lifecycle of content blocks (text and tool uses) in the model's response
-            # Provides structured tracking with contentBlockIndex, messageStart/Stop, etc.
-            # ALSO track first token time for latency calculation
-            for processed_event in _handle_content_block_events(event, current_block_index):
-                # Track first token time for latency calculation
-                # Track ANY content block delta (text OR tool use) as first token
-                # Reasoning events are tracked separately in STEP 6
-                if first_token_time is None:
-                    event_type = processed_event.get("type")
-                    if event_type == "content_block_delta":
-                        event_data = processed_event.get("data", {})
-                        # Track first token for both text and tool use deltas
-                        # Tool use deltas indicate the model is generating tool calls
-                        if event_data.get("type") in ("text", "tool_use"):
-                            first_token_time = time.time()
-                            logger.debug(f"First token detected (content_block_delta, type={event_data.get('type')})")
-                yield processed_event
+                # If we should break, check one more time for metadata
+                # IMPORTANT: Don't break immediately if we haven't seen result yet
+                # The result event (which contains metrics) might come after complete
+                if complete_seen:
+                    # Check one more time for metadata in case result came with complete
+                    metadata_events_after_complete = _handle_metadata_events(event)
+                    for processed_event in metadata_events_after_complete:
+                        # Accumulate metadata for summary — see note on the main
+                        # loop's accumulator above. Both `metadata` (per-call)
+                        # and `metadata_summary` (turn-cumulative from result)
+                        # feed accumulated_metadata so the final emit is total.
+                        if processed_event.get("type") in ("metadata", "metadata_summary"):
+                            event_data = processed_event.get("data", {})
+                            if "usage" in event_data:
+                                accumulated_metadata["usage"].update(event_data["usage"])
+                            if "metrics" in event_data:
+                                accumulated_metadata["metrics"].update(event_data["metrics"])
+                        # Yield the metadata event
+                        yield processed_event
 
-            # STEP 5: Process tool events (ENHANCED with display_content)
-            # These occur when the agent decides to use a tool
-            # Since Strands yields complete JSON objects, inputs will be complete
-            for processed_event in _handle_tool_events(event):
-                yield processed_event
+                # STEP 3: Process lifecycle events
+                # NOTE: We process lifecycle events to capture the 'result' event which contains metrics
+                # The result event is needed for metadata extraction, but we don't yield it to avoid
+                # sending large result objects to the client. Metadata is extracted separately.
+                lifecycle_events = _handle_lifecycle_events(event)
+                # Only yield non-result lifecycle events (result is processed for metadata only)
+                for processed_event in lifecycle_events:
+                    # Track if we've seen the result event (contains final metrics)
+                    if processed_event.get("type") == "result":
+                        result_seen = True
+                        
+                    # Skip result events - we only use them for metadata extraction
+                    if processed_event.get("type") != "result":
+                        yield processed_event
 
-            # STEP 6: Process reasoning events
-            # These show the model's internal thought process (if supported)
-            # Not all models support reasoning
-            # ALSO track first token time if reasoning comes before text (some models emit reasoning first)
-            for processed_event in _handle_reasoning_events(event):
-                # Track first token time for reasoning events
-                # Reasoning text is the first output from reasoning-capable models
-                if first_token_time is None:
-                    event_type = processed_event.get("type")
-                    if event_type == "reasoning":
-                        event_data = processed_event.get("data", {})
-                        # If there's reasoningText, this is the first token
-                        if "reasoningText" in event_data or "reasoning" in event_data:
-                            first_token_time = time.time()
-                            logger.debug("First token detected (reasoning event)")
-                yield processed_event
+                # STEP 4: Process content block events
+                # These track the lifecycle of content blocks (text and tool uses) in the model's response
+                # Provides structured tracking with contentBlockIndex, messageStart/Stop, etc.
+                # ALSO track first token time for latency calculation
+                for processed_event in _handle_content_block_events(event, current_block_index):
+                    # Track first token time for latency calculation
+                    # Track ANY content block delta (text OR tool use) as first token
+                    # Reasoning events are tracked separately in STEP 6
+                    if first_token_time is None:
+                        event_type = processed_event.get("type")
+                        if event_type == "content_block_delta":
+                            event_data = processed_event.get("data", {})
+                            # Track first token for both text and tool use deltas
+                            # Tool use deltas indicate the model is generating tool calls
+                            if event_data.get("type") in ("text", "tool_use"):
+                                first_token_time = time.time()
+                                logger.debug(f"First token detected (content_block_delta, type={event_data.get('type')})")
+                    yield processed_event
 
-            # STEP 7: Process citation events (ENHANCED with inline citations)
-            # These contain source references from models that support citations
-            # Now includes citation_start and citation_end for inline citations
-            for processed_event in _handle_citation_events(event):
-                yield processed_event
+                # STEP 5: Process tool events (ENHANCED with display_content)
+                # These occur when the agent decides to use a tool
+                # Since Strands yields complete JSON objects, inputs will be complete
+                for processed_event in _handle_tool_events(event):
+                    yield processed_event
+
+                # STEP 6: Process reasoning events
+                # These show the model's internal thought process (if supported)
+                # Not all models support reasoning
+                # ALSO track first token time if reasoning comes before text (some models emit reasoning first)
+                for processed_event in _handle_reasoning_events(event):
+                    # Track first token time for reasoning events
+                    # Reasoning text is the first output from reasoning-capable models
+                    if first_token_time is None:
+                        event_type = processed_event.get("type")
+                        if event_type == "reasoning":
+                            event_data = processed_event.get("data", {})
+                            # If there's reasoningText, this is the first token
+                            if "reasoningText" in event_data or "reasoning" in event_data:
+                                first_token_time = time.time()
+                                logger.debug("First token detected (reasoning event)")
+                    yield processed_event
+
+                # STEP 7: Process citation events (ENHANCED with inline citations)
+                # These contain source references from models that support citations
+                # Now includes citation_start and citation_end for inline citations
+                for processed_event in _handle_citation_events(event):
+                    yield processed_event
+
+                # STEP 8: Early Exit Check
+                # Exit early once both complete + result are seen.
+                # This prevents hanging the stream if more events are sent after result.
+                if complete_seen and result_seen:
+                    break
 
         # STEP 8: Yield metadata summary before done event
         # This provides all accumulated metadata in one place for storage
