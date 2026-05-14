@@ -265,7 +265,9 @@ class TestMakeListSpreadsheetsTool:
             user_id="u1",
         )
 
-        assert inspect.iscoroutinefunction(tool_fn), (
+        # Note: inspect.iscoroutinefunction() can fail on class instances even
+        # if they use update_wrapper(). We check the underlying function.
+        assert inspect.iscoroutinefunction(tool_fn.__wrapped__), (
             "list_spreadsheets must be async so Strands can await it (issue #260)"
         )
 
