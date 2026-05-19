@@ -3,9 +3,8 @@
 All tests are self-contained — no AWS credentials or Code Interpreter required.
 The guard runs before any S3 download, so we only need to mock _find_file.
 
-Note: the Strands @tool decorator (v1.39) runs the underlying coroutine to
-completion synchronously via its own event-loop management, so the wrapped
-function is called as a plain function — NOT awaited.
+Note: the Strands @tool decorator (v1.39) wraps these as async coroutines.
+The tests must be defined as `async def` and `await` the tool calls.
 
 Run from backend/:
     uv run --extra agentcore --extra dev python -m pytest tests/agents/builtin_tools/test_file_size_guard.py -v
@@ -53,8 +52,9 @@ def _file_info(size_bytes: int) -> dict:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 class TestHardSizeLimit:
-    def test_rejects_file_over_25mb(self):
+    async def test_rejects_file_over_25mb(self):
         """Files over FILE_SIZE_HARD_BYTES must be rejected before download."""
         oversized = FILE_SIZE_HARD_BYTES + 1  # 25 MB + 1 byte
 
@@ -72,7 +72,7 @@ class TestHardSizeLimit:
             ) as mock_download,
         ):
             fn = _make_tool()
-            result = fn(filename="data.csv", python_code="print('hi')")
+            result = await fn(filename="data.csv", python_code="print('hi')")
 
         assert result["status"] == "error"
         assert "❌" in result["content"][0]["text"]
@@ -80,7 +80,7 @@ class TestHardSizeLimit:
         # Critical: S3 download must never be called for oversized files.
         mock_download.assert_not_called()
 
-    def test_error_message_contains_actual_size(self):
+    async def test_error_message_contains_actual_size(self):
         """The error message must tell the user the actual file size."""
         size = 30 * 1024 * 1024  # 30 MB
 
@@ -96,12 +96,12 @@ class TestHardSizeLimit:
             patch("agents.builtin_tools.spreadsheet_analysis.analyze_tool._download_file"),
         ):
             fn = _make_tool()
-            result = fn(filename="data.csv", python_code="print('hi')")
+            result = await fn(filename="data.csv", python_code="print('hi')")
 
         assert result["status"] == "error"
         assert "30.0 MB" in result["content"][0]["text"]
 
-    def test_exact_hard_limit_is_rejected(self):
+    async def test_exact_hard_limit_is_rejected(self):
         """A file at exactly FILE_SIZE_HARD_BYTES must also be rejected (>= guard)."""
         with (
             patch(
@@ -117,7 +117,7 @@ class TestHardSizeLimit:
             ) as mock_download,
         ):
             fn = _make_tool()
-            result = fn(filename="data.csv", python_code="print('hi')")
+            result = await fn(filename="data.csv", python_code="print('hi')")
 
         assert result["status"] == "error"
         mock_download.assert_not_called()
@@ -128,6 +128,7 @@ class TestHardSizeLimit:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 class TestSoftSizeWarning:
     def _mock_ci(self, stdout: str = "42\n"):
         """Minimal CodeInterpreter mock that returns the given stdout."""
@@ -146,7 +147,7 @@ class TestSoftSizeWarning:
         }
         return ci
 
-    def test_large_file_gets_warning_prepended(self):
+    async def test_large_file_gets_warning_prepended(self):
         """Files between 10–25 MB must succeed but include a ⚠️ warning."""
         large_size = FILE_SIZE_WARN_BYTES + 1  # just over 10 MB
         mock_ci = self._mock_ci("result: 99\n")
@@ -170,14 +171,14 @@ class TestSoftSizeWarning:
             ),
         ):
             fn = _make_tool()
-            result = fn(filename="data.csv", python_code="print(99)")
+            result = await fn(filename="data.csv", python_code="print(99)")
 
         assert result["status"] == "success"
         text = result["content"][0]["text"]
         assert "⚠️" in text
         assert "result: 99" in text  # actual output still present
 
-    def test_file_below_warn_threshold_has_no_warning(self):
+    async def test_file_below_warn_threshold_has_no_warning(self):
         """Files under 10 MB must have no warning in the output."""
         small_size = FILE_SIZE_WARN_BYTES - 1  # just under 10 MB
         mock_ci = self._mock_ci("done\n")
@@ -201,7 +202,7 @@ class TestSoftSizeWarning:
             ),
         ):
             fn = _make_tool()
-            result = fn(filename="data.csv", python_code="print('done')")
+            result = await fn(filename="data.csv", python_code="print('done')")
 
         assert result["status"] == "success"
         text = result["content"][0]["text"]
@@ -214,8 +215,9 @@ class TestSoftSizeWarning:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 class TestMissingSizeBytes:
-    def test_missing_size_bytes_defaults_to_zero(self):
+    async def test_missing_size_bytes_defaults_to_zero(self):
         """If size_bytes is absent from file_info, guard must not fire."""
         file_without_size = {k: v for k, v in _BASE_FILE_INFO.items()}
 
@@ -252,7 +254,7 @@ class TestMissingSizeBytes:
             ),
         ):
             fn = _make_tool()
-            result = fn(filename="data.csv", python_code="print('ok')")
+            result = await fn(filename="data.csv", python_code="print('ok')")
 
         assert result["status"] == "success"
 
@@ -262,10 +264,11 @@ class TestMissingSizeBytes:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 class TestSizeLabelsInListOutput:
     """list_spreadsheets must surface ⛔ / ⚠️ labels for large files."""
 
-    def test_oversized_file_shows_blocked_label(self):
+    async def test_oversized_file_shows_blocked_label(self):
         from agents.builtin_tools.spreadsheet_analysis.list_spreadsheets_tool import (
             make_list_spreadsheets_tool,
         )
@@ -285,13 +288,13 @@ class TestSizeLabelsInListOutput:
             tool_fn = make_list_spreadsheets_tool(
                 assistant_id=None, session_id="s1", user_id="u1"
             )
-            result = tool_fn()
+            result = await tool_fn()
 
         text = result["content"][0]["text"]
         assert "⛔" in text
         assert "exceeds" in text
 
-    def test_large_file_shows_warning_label(self):
+    async def test_large_file_shows_warning_label(self):
         from agents.builtin_tools.spreadsheet_analysis.list_spreadsheets_tool import (
             make_list_spreadsheets_tool,
         )
@@ -311,12 +314,12 @@ class TestSizeLabelsInListOutput:
             tool_fn = make_list_spreadsheets_tool(
                 assistant_id=None, session_id="s1", user_id="u1"
             )
-            result = tool_fn()
+            result = await tool_fn()
 
         text = result["content"][0]["text"]
         assert "⚠️" in text
 
-    def test_small_file_shows_kb_only(self):
+    async def test_small_file_shows_kb_only(self):
         from agents.builtin_tools.spreadsheet_analysis.list_spreadsheets_tool import (
             make_list_spreadsheets_tool,
         )
@@ -336,7 +339,7 @@ class TestSizeLabelsInListOutput:
             tool_fn = make_list_spreadsheets_tool(
                 assistant_id=None, session_id="s1", user_id="u1"
             )
-            result = tool_fn()
+            result = await tool_fn()
 
         text = result["content"][0]["text"]
         assert "KB" in text
