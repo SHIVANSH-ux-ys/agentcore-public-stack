@@ -1,0 +1,196 @@
+.travel-section {
+  padding: 4rem 0;
+  min-height: 100vh;
+  /* Calm, scenic travel background */
+  background: linear-gradient(rgba(0,0,0,0.5), rgba(0,0,0,0.3)), url('https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?ixlib=rb-4.0.3&auto=format&fit=crop&w=2000&q=80') center/cover fixed;
+}
+
+.travel-section .section-title {
+  color: white;
+  text-shadow: 0 2px 10px rgba(0,0,0,0.3);
+}
+
+.travel-header-text {
+  margin-bottom: 3rem;
+}
+
+.travel-header-text p {
+  color: rgba(255, 255, 255, 0.9);
+  margin-bottom: 1.5rem;
+  font-size: 1.1rem;
+}
+
+.delete-trip-btn {
+  position: absolute;
+  top: 10px;
+  right: 15px;
+  background: rgba(190, 18, 60, 0.2);
+  color: var(--color-primary);
+  border: none;
+  border-radius: 50%;
+  width: 30px;
+  height: 30px;
+  font-size: 1.2rem;
+  font-weight: bold;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  z-index: 10;
+}
+
+.delete-trip-btn:hover {
+  background: var(--color-primary);
+  color: white;
+  transform: scale(1.1);
+}
+
+.masonry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  grid-auto-rows: 20px; /* Base height for rows to span across */
+  gap: 1.5rem;
+}
+
+.masonry-item {
+  border-radius: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem;
+  transition: transform 0.3s ease;
+  overflow: hidden;
+  position: relative;
+}
+
+.masonry-item:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 10px 40px rgba(190, 18, 60, 0.2);
+}
+
+/* Span different amounts of rows to create a masonry look */
+.masonry-item.small {
+  grid-row-end: span 10;
+}
+
+.masonry-item.medium {
+  grid-row-end: span 14;
+}
+
+.masonry-item.large {
+  grid-row-end: span 18;
+}
+
+.placeholder-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.travel-icon {
+  font-size: 2.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.placeholder-content h3 {
+  color: var(--color-primary);
+  font-size: 1.2rem;
+  margin-bottom: 0;
+}
+
+.placeholder-content p {
+  color: var(--color-text-main);
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.reserved-tag {
+  background: rgba(190, 18, 60, 0.1);
+  color: var(--color-primary);
+  padding: 0.3rem 0.8rem;
+  border-radius: 20px;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-top: 1rem;
+  font-weight: 600;
+}
+
+.photo-count {
+  background: var(--color-primary);
+  color: white;
+}
+
+.trip-link-wrapper {
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+
+.add-trip-btn {
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  padding: 0.8rem 2rem;
+  border-radius: 30px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.add-trip-btn:hover {
+  background: #9f1239;
+  transform: translateY(-2px);
+}
+
+.trip-form-container {
+  max-width: 600px;
+  margin: 0 auto 3rem auto;
+  padding: 2rem;
+}
+
+.trip-form-container h3 {
+  color: var(--color-primary);
+  margin-bottom: 1.5rem;
+  text-align: center;
+}
+
+.trip-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.trip-form input[type="text"] {
+  padding: 1rem;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.7);
+  font-family: 'Inter', sans-serif;
+  outline: none;
+}
+
+.file-upload-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 10px;
+}
+
+.submit-trip-btn {
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  padding: 1rem;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 1rem;
+}

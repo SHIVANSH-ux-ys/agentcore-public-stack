@@ -1,0 +1,22 @@
+/* App wrapper styling */
+.app-container {
+  width: 100%;
+  min-height: 100vh;
+}
+
+.page-content {
+  padding-left: 260px; /* Space for the left sidebar */
+  animation: fadeIn 0.5s ease-in-out;
+}
+
+@media (max-width: 768px) {
+  .page-content {
+    padding-left: 0;
+    padding-bottom: 80px; /* Space for mobile bottom bar */
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}

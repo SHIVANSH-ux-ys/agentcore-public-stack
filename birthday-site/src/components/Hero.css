@@ -1,0 +1,528 @@
+.hero-section {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  overflow: hidden;
+  /* Animated Fairy Tail Couple Background */
+  background: url('https://media1.tenor.com/m/Z4N3n-P_e10AAAAC/natsu-lucy-fairy-tail.gif') center/cover fixed;
+}
+
+.hero-background-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.3), rgba(190, 18, 60, 0.4));
+  z-index: 1;
+}
+
+.hero-content {
+  position: relative;
+  z-index: 10;
+  text-align: center;
+  max-width: 800px;
+  width: 90%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2rem;
+  padding: 4rem 0;
+}
+
+.grand-title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: 'Cormorant Garamond', serif;
+  color: white;
+  text-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  margin-bottom: 0;
+}
+
+.name {
+  font-size: 5rem;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+.ampersand {
+  font-size: 3rem;
+  color: var(--color-secondary);
+  font-style: italic;
+  margin: -10px 0;
+}
+
+.hero-subtitle {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 1.5rem;
+  font-weight: 300;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+}
+
+/* ── Floating sparkles ── */
+.sparkle-container {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  overflow: hidden;
+}
+
+.sparkle {
+  position: absolute;
+  font-size: 1.2rem;
+  color: #fbbf24;
+  opacity: 0;
+  animation: twinkle 5s ease-in-out infinite;
+}
+.sparkle-1 { top: 10%; left: 15%; animation-delay: 0s;   font-size: 0.9rem; }
+.sparkle-2 { top: 25%; right: 12%; animation-delay: 1.2s; font-size: 1.4rem; }
+.sparkle-3 { bottom: 20%; left: 20%; animation-delay: 2.4s; font-size: 1rem; }
+.sparkle-4 { top: 60%; right: 18%; animation-delay: 0.8s; font-size: 0.8rem; }
+.sparkle-5 { bottom: 35%; left: 8%;  animation-delay: 3.5s; font-size: 1.2rem; }
+.sparkle-6 { top: 45%; right: 6%;  animation-delay: 2s;   font-size: 0.7rem; }
+
+@keyframes twinkle {
+  0%,100% { opacity: 0; transform: scale(0.6) rotate(0deg); }
+  50%      { opacity: 0.9; transform: scale(1.3) rotate(30deg); }
+}
+
+/* ── Love Note Rotator ── */
+.love-note-rotator {
+  position: relative;
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(20px);
+  padding: 2.5rem 3rem 2rem;
+  border-radius: 24px;
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  text-align: center;
+  max-width: 520px;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* Pulsing ring behind heart */
+.heart-pulse-ring {
+  position: absolute;
+  top: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: rgba(252, 165, 165, 0.3);
+  animation: pulseRing 2s ease-out infinite;
+}
+
+@keyframes pulseRing {
+  0%   { transform: translateX(-50%) scale(0.8); opacity: 0.8; }
+  70%  { transform: translateX(-50%) scale(2.2); opacity: 0; }
+  100% { transform: translateX(-50%) scale(0.8); opacity: 0; }
+}
+
+.heart-pulse {
+  font-size: 2rem;
+  animation: heartbeat 1.4s ease-in-out infinite;
+  display: block;
+  margin-bottom: 1rem;
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes heartbeat {
+  0%,100% { transform: scale(1); }
+  14%     { transform: scale(1.25); }
+  28%     { transform: scale(1); }
+  42%     { transform: scale(1.2); }
+  56%     { transform: scale(1); }
+}
+
+.note-content {
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+.note-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.note-hidden {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.note-icon {
+  font-size: 1.8rem;
+  display: block;
+  margin-bottom: 0.75rem;
+}
+
+.note-text {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 1.2rem;
+  font-style: italic;
+  line-height: 1.7;
+  color: rgba(255,255,255,0.95);
+  text-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+/* Dot navigation */
+.note-dots {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 1.5rem;
+}
+
+.note-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.4);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  border: none;
+}
+
+.note-dot.active {
+  background: rgba(255,255,255,0.9);
+  transform: scale(1.4);
+}
+
+.love-letter-box {
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--color-text-main);
+  padding: 3rem;
+  border-radius: 15px;
+  text-align: left;
+  margin-top: 2rem;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+  position: relative;
+}
+
+.love-letter-box::before {
+  content: '“';
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 6rem;
+  color: var(--color-secondary);
+  position: absolute;
+  top: -20px;
+  left: 20px;
+  opacity: 0.3;
+}
+
+.love-letter-box h3 {
+  font-size: 1.8rem;
+  margin-bottom: 1.5rem;
+}
+
+.love-letter-box p {
+  font-size: 1.1rem;
+  line-height: 1.8;
+  margin-bottom: 1rem;
+}
+
+.signature {
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-size: 1.5rem;
+  text-align: right;
+  margin-top: 2rem !important;
+  color: var(--color-primary);
+}
+
+/* Scattered Polaroids */
+.scattered-polaroid {
+  position: absolute;
+  width: 160px;
+  padding: 10px 10px 36px 10px;
+  background: white;
+  border-radius: 4px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  z-index: 5;
+  cursor: pointer;
+  transition: transform 0.4s ease, box-shadow 0.4s ease;
+  overflow: hidden;
+  animation: floatPolaroid 8s ease-in-out infinite;
+}
+
+.scattered-polaroid:hover {
+  transform: scale(1.18) rotate(0deg) !important;
+  z-index: 20;
+  box-shadow: 0 20px 50px rgba(190, 18, 60, 0.35);
+  animation: none;
+}
+
+@keyframes floatPolaroid {
+  0%, 100% { transform: translateY(0) rotate(var(--rot)); }
+  50% { transform: translateY(-15px) rotate(calc(var(--rot) + 4deg)); }
+}
+
+/* The uploaded photo */
+.polaroid-img {
+  width: 100%;
+  height: 140px;
+  object-fit: cover;
+  display: block;
+  border-radius: 2px;
+}
+
+/* Placeholder before photo is added */
+.polaroid-img-placeholder {
+  width: 100%;
+  height: 140px;
+  background: linear-gradient(135deg, #ffe4e6, #fce7f3);
+  border: 2px dashed #fca5a5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 2px;
+}
+
+.polaroid-icon {
+  font-size: 2rem;
+}
+
+.polaroid-hint {
+  color: #be123c;
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-family: 'Montserrat', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Caption label at the bottom of polaroid */
+.polaroid-label {
+  text-align: center;
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 0.95rem;
+  color: #881337;
+  margin-top: 6px;
+  font-style: italic;
+}
+
+/* Edit overlay on hover */
+.polaroid-edit-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: calc(100% - 36px);
+  background: rgba(190, 18, 60, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: 600;
+  font-size: 0.9rem;
+  font-family: 'Montserrat', sans-serif;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  border-radius: 2px;
+}
+
+.scattered-polaroid:hover .polaroid-edit-overlay {
+  opacity: 1;
+}
+
+.p1 {
+  top: 15%;
+  left: 8%;
+  --rot: -14deg;
+  transform: rotate(var(--rot));
+  animation-delay: 0s;
+}
+
+.p2 {
+  bottom: 18%;
+  left: 4%;
+  --rot: 10deg;
+  transform: rotate(var(--rot));
+  animation-delay: 2s;
+}
+
+.p3 {
+  top: 28%;
+  right: 8%;
+  --rot: 18deg;
+  transform: rotate(var(--rot));
+  animation-delay: 4s;
+}
+
+/* ── Floating Romantic Hearts on the Left Side ── */
+.floating-hearts-container {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 250px;
+  pointer-events: none;
+  z-index: 15;
+  overflow: hidden;
+}
+
+.floating-hearts-container.left {
+  left: 0;
+}
+
+.heart {
+  position: absolute;
+  bottom: -50px;
+  font-size: 2rem;
+  animation: floatUp 10s linear infinite, sway 3s ease-in-out infinite alternate;
+  opacity: 0;
+  text-shadow: 0 0 10px rgba(255, 105, 180, 0.8);
+}
+
+.h1 { left: 15%; animation-delay: 0s;   font-size: 1.5rem; }
+.h2 { left: 45%; animation-delay: 2s;   font-size: 2.2rem; }
+.h3 { left: 75%; animation-delay: 4s;   font-size: 1.8rem; }
+.h4 { left: 25%; animation-delay: 6s;   font-size: 2.5rem; }
+.h5 { left: 60%; animation-delay: 8s;   font-size: 1.4rem; }
+.h6 { left: 35%; animation-delay: 3s;   font-size: 2.0rem; }
+.h7 { left: 80%; animation-delay: 7s;   font-size: 1.6rem; }
+
+@keyframes floatUp {
+  0%   { bottom: -50px; opacity: 0; }
+  10%  { opacity: 0.9; }
+  80%  { opacity: 0.9; }
+  100% { bottom: 100vh; opacity: 0; }
+}
+
+@keyframes sway {
+  0%   { transform: translateX(0px) rotate(0deg); }
+  100% { transform: translateX(40px) rotate(25deg); }
+}
+
+@media (max-width: 1024px) {
+  .scattered-polaroid {
+    display: none;
+  }
+}
+
+/* Custom Name Input styling */
+.name-input-container {
+  margin-top: 1.5rem;
+  padding: 1.5rem 2rem;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.name-input-container label {
+  color: white;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 500;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+
+.custom-name-input {
+  background: rgba(255, 255, 255, 0.85);
+  border: 2px solid transparent;
+  padding: 0.6rem 1.2rem;
+  border-radius: 8px;
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 1.2rem;
+  font-weight: bold;
+  color: var(--color-text-main);
+  text-align: center;
+  outline: none;
+  transition: all 0.3s ease;
+  width: 100%;
+  max-width: 250px;
+}
+
+.custom-name-input:focus {
+  background: white;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 15px rgba(190, 18, 60, 0.3);
+}
+
+/* Background Video Wrapper */
+.video-background-wrapper {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 0;
+  overflow: hidden;
+  background: #000;
+}
+
+/* Force YouTube embed to cover screen (16:9 ratio) */
+.react-player-bg {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 100vw !important;
+  height: 56.25vw !important;
+  min-height: 100vh !important;
+  min-width: 177.77vh !important;
+  pointer-events: none; /* Prevents user from pausing the background video manually */
+}
+
+/* Custom Controls Container */
+.custom-controls-container {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 1.5rem;
+  margin-top: 1rem;
+  width: 100%;
+}
+
+.video-input-container {
+  padding: 1.5rem 2rem;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.video-input-container label {
+  color: white;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 500;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+
+.music-toggle-btn {
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  padding: 0.6rem 1.2rem;
+  border-radius: 8px;
+  font-family: 'Montserrat', sans-serif;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  margin-top: 0.5rem;
+  box-shadow: 0 4px 15px rgba(190, 18, 60, 0.4);
+}
+
+.music-toggle-btn:hover {
+  background: #9f1239;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(190, 18, 60, 0.6);
+}

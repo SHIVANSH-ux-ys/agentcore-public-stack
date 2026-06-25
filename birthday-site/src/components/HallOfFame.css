@@ -1,0 +1,50 @@
+.hall-of-fame-section {
+  padding: 4rem 0;
+}
+
+.polaroid-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3rem;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem;
+}
+
+.polaroid {
+  background: white;
+  padding: 15px 15px 40px 15px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+  border-radius: 5px;
+  width: 250px;
+  text-align: center;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.polaroid:hover {
+  transform: scale(1.05) rotate(0deg) !important;
+  box-shadow: 0 15px 40px rgba(190, 18, 60, 0.2);
+  z-index: 10;
+}
+
+.polaroid-image-placeholder {
+  width: 100%;
+  height: 220px;
+  background: #f0f0f0;
+  border: 1px dashed #ccc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #999;
+  font-family: 'Inter', sans-serif;
+}
+
+.polaroid-caption {
+  font-family: 'Playfair Display', serif;
+  font-size: 1.2rem;
+  color: #333;
+  margin-top: 15px;
+  font-style: italic;
+}
